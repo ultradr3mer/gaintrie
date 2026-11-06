@@ -288,15 +288,15 @@ def summarize(comp: dict, dec: dict | None, run_dir: Path):
     print(f"{'type':<34}{'tensors':>8}{'values':>15}{'raw GB':>9}{'stored GB':>11}{'ratio':>8}{'bits/v':>8}"
           f"{'bins won':>10}")
     for kind, (n, v, raw, stored, bins) in sorted(groups.items(), key=lambda kv: -kv[1][2]):
-        print(f"{kind:<34}{n:>8}{v:>15,}{raw / 1e9:>9.3f}{stored / 1e9:>11.3f}{stored / raw:>8.4f}"
-              f"{stored * 8 / v:>8.3f}{bins:>7}/{n}")
+        print(f"{kind:<34}{n:>8}{v:>15,}{raw / 1e9:>9.3f}{stored / 1e9:>11.3f}{stored / raw if raw else 0:>8.4f}"
+              f"{stored * 8 / v if v else 0:>8.3f}{bins:>7}/{n}")
     layers = defaultdict(lambda: [0, 0])
     for r in tensors:
         if r["layer"] is not None:
             layers[r["layer"]][0] += r["raw_bytes"]
             layers[r["layer"]][1] += r["stored_bytes"]
-    print("==Per layer== ratio: " + "  ".join(f"{l}:{s / raw:.4f}" for l, (raw, s) in sorted(layers.items())))
-    bpv = np.array([u["bits_per_value"] for u in units if u["kind"] != "raw"])
+    print("==Per layer== ratio: " + "  ".join(f"{l}:{s / raw if raw else 0:.4f}" for l, (raw, s) in sorted(layers.items())))
+    bpv = np.array([u["bits_per_value"] for u in units if u["kind"] != "raw"] or [0.0])
     print(f"==Per unit== {len(units)} units ({sum(u['kind'] == 'pair' for u in units)} bins, "
           f"{sum(u['kind'] == 'matrix' for u in units)} matrices, {sum(u['kind'] == 'raw' for u in units)} raw); "
           f"bits/value min {bpv.min():.3f}, median {np.median(bpv):.3f}, max {bpv.max():.3f}")

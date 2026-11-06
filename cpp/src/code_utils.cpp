@@ -199,4 +199,15 @@ void PrefixDecoder::decode(BitReader& br, size_t n, uint32_t* out) const {
     }
 }
 
+void decode_chunks(BitReader& br, const PrefixDecoder& dec, uint64_t start, uint64_t n,
+                   const std::vector<uint64_t>& leaves, const SymSink& sink) {
+    const uint64_t chunk = 1 << 16;
+    std::vector<uint32_t> sym(std::min(n, chunk));
+    for (uint64_t i = 0; i < n; i += chunk) {
+        size_t k = size_t(std::min(chunk, n - i));
+        dec.decode(br, k, sym.data());
+        sink(start + i, sym.data(), k, leaves);
+    }
+}
+
 }  // namespace cle

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -42,6 +43,26 @@ inline void check_width(const uint64_t* x, size_t n, int width) {
     uint64_t any = 0;
     for (size_t i = 0; i < n; i++) any |= x[i];
     if (any >> width) throw std::runtime_error("value does not fit width");
+}
+
+// leaves[sym[i]] as little-endian elements of `bytes` bytes
+inline void put_le(const std::vector<uint64_t>& leaves, const uint32_t* sym, size_t m, int bytes, char* dst) {
+    uint64_t lim = bytes >= 8 ? ~0ull : (1ull << (8 * bytes)) - 1;
+    auto put = [&](auto tag) {
+        constexpr int B = decltype(tag)::value;
+        for (size_t i = 0; i < m; i++) {
+            uint64_t v = leaves[sym[i]];
+            if (v > lim) throw std::runtime_error("value does not fit the output element size");
+            for (int b = 0; b < B; b++) dst[i * B + b] = char(v >> (8 * b));
+        }
+    };
+    switch (bytes) {
+        case 1: return put(std::integral_constant<int, 1>());
+        case 2: return put(std::integral_constant<int, 2>());
+        case 4: return put(std::integral_constant<int, 4>());
+        case 8: return put(std::integral_constant<int, 8>());
+    }
+    throw std::runtime_error("element size must be 1, 2, 4 or 8");
 }
 
 // value -> index; reusable: assign() only overwrites the given values

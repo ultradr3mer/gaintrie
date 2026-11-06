@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -10,6 +11,7 @@
 
 #include "matrix_coder.hpp"
 #include "pair_writer.hpp"
+#include "pipeline.hpp"
 
 using namespace cle;
 
@@ -21,7 +23,11 @@ const char* USAGE =
     "                  [--mask auto|raw|comb] [--stream auto|tree|huffman] [--pos auto|msb|order]\n"
     "                  [--in-bytes 1|2|4|8] [--stats] in.bin out.cle\n"
     "  gaintrie decode --format pair|matrix [--out-bytes 1|2|4|8] [--stats] in.cle out.bin\n"
-    "values are little-endian unsigned; default element size = smallest of 1/2/4/8 bytes holding W bits\n";
+    "values are little-endian unsigned; default element size = smallest of 1/2/4/8 bytes holding W bits\n"
+    "  gaintrie compress <model dir> <archive> [--run-dir D] [--bin-size N] [--workers N]\n"
+    "  gaintrie decompress <archive> <out dir> [--reference <model dir>] [--run-dir D] [--workers N]\n"
+    "  gaintrie roundtrip <model dir> <run dir> [--bin-size N] [--workers N]\n"
+    "model dir: *.safetensors shards (+ sha256.txt); run dir gets the metrics (default: archive dir / out dir)\n";
 
 int default_bytes(int width) { return width <= 8 ? 1 : width <= 16 ? 2 : width <= 32 ? 4 : 8; }
 
@@ -67,6 +73,31 @@ int pick(const std::map<std::string, std::string>& opt, const std::string& key,
     return n->second;
 }
 
+int run_pipeline(const std::string& cmd, std::map<std::string, std::string>& opt, const std::vector<std::string>& files) {
+    for (const auto& kv : opt)
+        if (kv.first != "run-dir" && kv.first != "bin-size" && kv.first != "workers" && kv.first != "reference")
+            throw std::runtime_error("unknown option --" + kv.first);
+    if (files.size() != 2) {
+        std::cerr << USAGE;
+        return 2;
+    }
+    uint64_t bin_size = opt.count("bin-size") ? std::stoull(opt["bin-size"]) : (1ull << 20);
+    int workers = opt.count("workers") ? std::stoi(opt["workers"]) : 8;
+    if (workers < 1) throw std::runtime_error("--workers must be >= 1");
+    if (cmd == "roundtrip") return pipeline_roundtrip(files[0], files[1], bin_size, workers) ? 0 : 3;
+    if (cmd == "compress") {
+        std::string run = opt.count("run-dir") ? opt["run-dir"] : std::filesystem::path(files[1]).parent_path().string();
+        if (run.empty()) run = ".";
+        pipeline_summarize(pipeline_compress(files[0], files[1], run, bin_size, workers), nullptr, run);
+        return 0;
+    }
+    std::string run = opt.count("run-dir") ? opt["run-dir"] : files[1];
+    DecompressResult dec = pipeline_decompress(files[0], files[1], run, workers, opt.count("reference") ? opt["reference"] : "");
+    std::printf("time: decompress %.1fs, verify %.1fs\n", dec.decompress_s, dec.verify_s);
+    print_checks(dec);
+    return dec.lossless() ? 0 : 3;
+}
+
 double seconds_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
 }
@@ -94,6 +125,7 @@ int main(int argc, char** argv) {
                 files.push_back(a);
             }
         }
+        if (cmd == "compress" || cmd == "decompress" || cmd == "roundtrip") return run_pipeline(cmd, opt, files);
         if ((cmd != "encode" && cmd != "decode") || files.size() != 2 || !opt.count("format")) {
             std::cerr << USAGE;
             return 2;

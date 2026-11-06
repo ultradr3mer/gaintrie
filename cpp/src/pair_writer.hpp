@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "bitio.hpp"
@@ -80,8 +81,14 @@ struct PairStats {
     uint64_t total() const { return header + tree + code_lengths + stream; }
 };
 
-std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int mask_mode = MASK_AUTO,
+std::vector<uint8_t> encode_pair(const uint64_t* x, size_t n, int width, int mask_mode = MASK_AUTO,
                                  int stream = STREAM_AUTO, int pos = POS_AUTO, PairStats* stats = nullptr);
+inline std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int mask_mode = MASK_AUTO,
+                                        int stream = STREAM_AUTO, int pos = POS_AUTO, PairStats* stats = nullptr) {
+    return encode_pair(x.data(), x.size(), width, mask_mode, stream, pos, stats);
+}
 std::vector<uint64_t> decode_pair(const uint8_t* data, size_t size, int* width = nullptr);
+// decoded values as little-endian elements of `bytes` bytes
+std::string decode_pair_le(const uint8_t* data, size_t size, int bytes);
 
 }  // namespace cle

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "bitio.hpp"
@@ -42,5 +43,10 @@ private:
     std::vector<int32_t> child_;  // 2 per node; 0 none, > 0 node, < 0 -(symbol + 1)
     std::vector<Entry> table_;
 };
+
+// decoded symbols in chunks: sink(first item index, symbols, count, leaf values)
+using SymSink = std::function<void(uint64_t, const uint32_t*, size_t, const std::vector<uint64_t>&)>;
+void decode_chunks(BitReader& br, const PrefixDecoder& dec, uint64_t start, uint64_t n,
+                   const std::vector<uint64_t>& leaves, const SymSink& sink);
 
 }  // namespace cle

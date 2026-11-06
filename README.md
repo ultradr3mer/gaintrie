@@ -4,7 +4,7 @@ Lossless compression for neural-network weights.
 
 **Qwen3-8B (bf16): 16.38 GB → 10.84 GB (66.2 %), restored byte for byte** — the rebuilt
 safetensors files match the SHA-256 hashes published on Hugging Face. Compressing the whole
-model takes 60 s, decompressing 26 s (16-core desktop, C++ codec).
+model takes 26 s, decompressing 11 s (16-core desktop, `gaintrie` C++ tool, 8 workers).
 
 ## How it compares
 
@@ -14,7 +14,7 @@ All numbers on the same input: the 5 safetensors shards of
 
 | method | size | of original | bits per weight | time |
 |---|---:|---:|---:|---:|
-| **gaintrie** | **10.84 GB** | **66.2 %** | **10.59** | 60 s |
+| **gaintrie** | **10.84 GB** | **66.2 %** | **10.59** | 26 s |
 | Huffman on the exponent bits only (the idea behind DFloat11 / ZipNN) ¹ | 10.92 GB | 66.7 % | 10.67 | – |
 | bzip2 -9 | 11.36 GB | 69.4 % | 11.10 | 208 s |
 | xz -6 | 11.62 GB | 70.9 % | 11.35 | 640 s |
@@ -127,37 +127,59 @@ A, C when that is cheaper — not here, where the split on the last open bit is 
 The pipeline logs every bin (`compress.csv`), both candidates per tensor (`tensors.csv`), decode
 times (`decompress.csv`) and the totals with the SHA-256 checks (`summary.json`).
 
-## Usage
+## Compress a model
 
-Requirements: Python ≥ 3.14 (clarautils uses lazy annotations), a C++17 compiler and CMake.
+Only a C++17 compiler and CMake are needed — no Python:
 
 ```bash
-pip install numpy "clarautils @ git+https://github.com/ultradr3mer/BitFlagArray"
 cmake -S cpp -B cpp/build && cmake --build cpp/build -j
 ```
 
-Compress, decompress and verify a model (a directory of `.safetensors` files):
+Compress, decompress and verify a model (a directory of `.safetensors` files, optionally with
+a `sha256.txt` of reference hashes):
 
 ```bash
-python gaintrie/pipeline.py roundtrip <model dir> <run dir>
+cpp/build/gaintrie roundtrip <model dir> <run dir>
 ```
 
 The run directory then contains `model.clar` (the archive), `restored/` (the rebuilt files)
-and the metrics. Single files with the command-line tool:
+and the metrics. The two halves on their own:
+
+```bash
+cpp/build/gaintrie compress <model dir> model.clar [--workers 8] [--bin-size 1048576] [--run-dir D]
+cpp/build/gaintrie decompress model.clar <out dir> [--reference <model dir>] [--workers 8] [--run-dir D]
+```
+
+`decompress` checks every rebuilt file against the SHA-256 stored in the archive (and against
+`<model dir>/sha256.txt` with `--reference`) and exits with code 3 if one differs.
+Single tensors as raw little-endian values:
 
 ```bash
 cpp/build/gaintrie encode --format matrix --width 16 --mode global --stats weights.bin out.cle
 cpp/build/gaintrie decode --format matrix out.cle weights.bin
 ```
 
-Tests (each file also runs without pytest):
+## Python reference, research and tests
+
+Requirements: Python ≥ 3.14 (clarautils uses lazy annotations), numpy, clarautils, and the C++
+build above (the Python pipeline and the compatibility tests call `cpp/build/gaintrie`).
+
+```bash
+pip install numpy "clarautils @ git+https://github.com/ultradr3mer/BitFlagArray"
+python gaintrie/pipeline.py roundtrip <model dir> <run dir>
+```
+
+Both pipelines write the same archive format and metrics files; archives from one decompress
+with the other. Tests (each Python file also runs without pytest):
 
 ```bash
 cpp/build/test_roundtrip
+cpp/build/test_pipeline
 python tests/test_pair_writer.py
 python tests/test_matrix_coder.py
 python tests/test_pipeline.py
 python tests/test_cpp_compat.py
+python tests/test_cpp_pipeline.py
 ```
 
 ## Repository layout
@@ -165,9 +187,9 @@ python tests/test_cpp_compat.py
 | path | content |
 |---|---|
 | `gaintrie/` | Python reference: trie (`GainCoder`), writers (`pair_writer`, `matrix_coder`), `pipeline`, `split_safetensors` |
-| `cpp/` | C++17 implementation of the same formats (library, `gaintrie` CLI, tests) |
+| `cpp/` | C++17 implementation: codec library, `gaintrie` CLI with the whole pipeline (compress / decompress / roundtrip), tests |
 | `research/` | experiments behind the design: flip masks, strait rules, bin sizes, bit orders, leaf statistics, baselines |
-| `tests/` | round-trip and compatibility tests |
+| `tests/` | Python round-trip tests and C++ ↔ Python compatibility tests |
 
 ## Limits
 

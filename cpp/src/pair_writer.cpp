@@ -388,12 +388,12 @@ ReadTree read_pair_tree(BitReader& br, uint64_t max_leaves) {
     return out;
 }
 
-std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int mask_mode, int stream, int pos,
+std::vector<uint8_t> encode_pair(const uint64_t* x, size_t n, int width, int mask_mode, int stream, int pos,
                                  PairStats* stats) {
-    if (x.empty()) throw std::runtime_error("empty input");
-    if (x.size() >= (1ull << 32)) throw std::runtime_error("item count does not fit the 32-bit header field");
-    check_width(x.data(), x.size(), width);
-    Uniq u = unique_counts(x.data(), x.size(), width);
+    if (n == 0) throw std::runtime_error("empty input");
+    if (n >= (1ull << 32)) throw std::runtime_error("item count does not fit the 32-bit header field");
+    check_width(x, n, width);
+    Uniq u = unique_counts(x, n, width);
     Tree tree = build_tree(u.values, width);
     ValueIndex vi(width);
     vi.assign(u.values);
@@ -429,7 +429,7 @@ std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int 
     }
 
     BitWriter bw;
-    bw.put_int(x.size(), 32);
+    bw.put_int(n, 32);
     bw.append(best.tree.bw);
     bw.put_int(best.stream, 1);
     std::vector<uint64_t> codes;
@@ -447,8 +447,8 @@ std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int 
     std::vector<uint64_t> leaf_values;
     for (const Leaf& l : best.tree.leaves) leaf_values.push_back(l.value);
     vi.assign(leaf_values);
-    for (uint64_t v : x) {
-        uint32_t i = vi[v];
+    for (size_t k = 0; k < n; k++) {
+        uint32_t i = vi[x[k]];
         bw.put_int(codes[i], lens[i]);
     }
     if (bw.bits() != best.total) throw std::logic_error("size mismatch");
@@ -463,11 +463,15 @@ std::vector<uint8_t> encode_pair(const std::vector<uint64_t>& x, int width, int 
     return bw.bytes();
 }
 
-std::vector<uint64_t> decode_pair(const uint8_t* data, size_t size, int* width) {
+namespace {
+
+void decode_pair(const uint8_t* data, size_t size, int* width, const std::function<void(uint64_t)>& begin,
+                 const SymSink& sink) {
     BitReader br(data, size);
     uint64_t n = br.get_int(32);
     ReadTree rt = read_pair_tree(br, n);
     if (width) *width = rt.width;
+    begin(n);
     std::vector<uint64_t> codes;
     std::vector<int> lens;
     if (br.get_int(1) == HUFFMAN) {
@@ -479,11 +483,28 @@ std::vector<uint64_t> decode_pair(const uint8_t* data, size_t size, int* width) 
             lens.push_back(l.len);
         }
     }
-    PrefixDecoder dec(codes, lens);
-    std::vector<uint32_t> sym(n);
-    dec.decode(br, n, sym.data());
-    std::vector<uint64_t> out(n);
-    for (size_t i = 0; i < n; i++) out[i] = rt.leaves[sym[i]].value;
+    std::vector<uint64_t> leaves;
+    for (const Leaf& l : rt.leaves) leaves.push_back(l.value);
+    decode_chunks(br, PrefixDecoder(codes, lens), 0, n, leaves, sink);
+}
+
+}  // namespace
+
+std::vector<uint64_t> decode_pair(const uint8_t* data, size_t size, int* width) {
+    std::vector<uint64_t> out;
+    decode_pair(data, size, width, [&](uint64_t n) { out.resize(n); },
+                [&](uint64_t start, const uint32_t* sym, size_t m, const std::vector<uint64_t>& leaves) {
+                    for (size_t i = 0; i < m; i++) out[start + i] = leaves[sym[i]];
+                });
+    return out;
+}
+
+std::string decode_pair_le(const uint8_t* data, size_t size, int bytes) {
+    std::string out;
+    decode_pair(data, size, nullptr, [&](uint64_t n) { out.resize(n * bytes); },
+                [&](uint64_t start, const uint32_t* sym, size_t m, const std::vector<uint64_t>& leaves) {
+                    put_le(leaves, sym, m, bytes, &out[start * bytes]);
+                });
     return out;
 }
 

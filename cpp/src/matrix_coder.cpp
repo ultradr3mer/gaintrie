@@ -51,14 +51,13 @@ void put_stream(BitWriter& out, const uint64_t* x, size_t n, const Uniq& u, Valu
 
 }  // namespace
 
-std::vector<uint8_t> encode_matrix(const std::vector<uint64_t>& x, int width, int mode, uint64_t bin_size,
+std::vector<uint8_t> encode_matrix(const uint64_t* x, size_t n, int width, int mode, uint64_t bin_size,
                                    MatrixStats* stats) {
-    size_t n = x.size();
     if (n == 0) throw std::runtime_error("empty input");
     if (n >> 32) throw std::runtime_error("item count does not fit the 32-bit header field");
     if (bin_size == 0 || bin_size >> 32) throw std::runtime_error("bin size must be 1..2^32-1");
     if (mode != GLOBAL && mode != HYBRID) throw std::runtime_error("unknown matrix mode");
-    check_width(x.data(), n, width);
+    check_width(x, n, width);
     MatrixStats st;
     BitWriter out;
     out.put_int(n, 32);
@@ -67,7 +66,7 @@ std::vector<uint8_t> encode_matrix(const std::vector<uint64_t>& x, int width, in
     out.put_int(bin_size, 32);
     st.header = 71;
 
-    Uniq u = unique_counts(x.data(), n, width);
+    Uniq u = unique_counts(x, n, width);
     TreeOut seg = best_tree(build_tree(u.values, width));
     ValueIndex vi(width);
     vi.assign(u.values);
@@ -82,7 +81,7 @@ std::vector<uint8_t> encode_matrix(const std::vector<uint64_t>& x, int width, in
     std::vector<uint64_t> leaves = leaf_values(seg.leaves);
 
     if (mode == GLOBAL) {
-        put_stream(out, x.data(), n, u, vi, leaves, lengths, st);
+        put_stream(out, x, n, u, vi, leaves, lengths, st);
     } else {
         ValueIndex gvi(width);
         gvi.assign(leaves);
@@ -90,7 +89,7 @@ std::vector<uint8_t> encode_matrix(const std::vector<uint64_t>& x, int width, in
         ValueIndex bvi(width);
         for (size_t start = 0; start < n; start += bin_size) {
             size_t m = std::min<size_t>(bin_size, n - start);
-            const uint64_t* b = x.data() + start;
+            const uint64_t* b = x + start;
             Uniq bu = unique_counts(b, m, width);
             TreeOut bseg = best_tree(build_tree(bu.values, width));
             put_len(out, bseg.bw.bits(), st);
@@ -106,7 +105,10 @@ std::vector<uint8_t> encode_matrix(const std::vector<uint64_t>& x, int width, in
     return out.bytes();
 }
 
-std::vector<uint64_t> decode_matrix(const uint8_t* data, size_t size, int* width) {
+namespace {
+
+void decode_matrix(const uint8_t* data, size_t size, int* width, const std::function<void(uint64_t)>& begin,
+                   const SymSink& sink) {
     BitReader br(data, size);
     uint64_t n = br.get_int(32);
     int w = int(br.get_int(6)) + 1;
@@ -124,14 +126,11 @@ std::vector<uint64_t> decode_matrix(const uint8_t* data, size_t size, int* width
     if (gt.width != w) throw std::runtime_error("tree width does not match the header");
     std::vector<int> lengths = read_code_lengths(g, gt.leaves.size());
     std::vector<uint64_t> leaves = leaf_values(gt.leaves);
-    std::vector<uint64_t> out(n);
-    std::vector<uint32_t> sym;
+    begin(n);
     if (mode == GLOBAL) {
         BitReader s = segment();
-        sym.resize(n);
-        PrefixDecoder(canonical_codes(lengths), lengths).decode(s, n, sym.data());
-        for (size_t i = 0; i < n; i++) out[i] = leaves[sym[i]];
-        return out;
+        decode_chunks(s, PrefixDecoder(canonical_codes(lengths), lengths), 0, n, leaves, sink);
+        return;
     }
     if (bin_size == 0) throw std::runtime_error("bin size 0");
     ValueIndex gvi(w);
@@ -144,10 +143,27 @@ std::vector<uint64_t> decode_matrix(const uint8_t* data, size_t size, int* width
         std::vector<uint64_t> bleaves = leaf_values(bt.leaves);
         std::vector<int> blen = bin_lengths(bleaves, gvi, lengths, max_len);
         BitReader s = segment();
-        sym.resize(m);
-        PrefixDecoder(canonical_codes(blen), blen).decode(s, m, sym.data());
-        for (uint64_t i = 0; i < m; i++) out[start + i] = bleaves[sym[i]];
+        decode_chunks(s, PrefixDecoder(canonical_codes(blen), blen), start, m, bleaves, sink);
     }
+}
+
+}  // namespace
+
+std::vector<uint64_t> decode_matrix(const uint8_t* data, size_t size, int* width) {
+    std::vector<uint64_t> out;
+    decode_matrix(data, size, width, [&](uint64_t n) { out.resize(n); },
+                  [&](uint64_t start, const uint32_t* sym, size_t m, const std::vector<uint64_t>& leaves) {
+                      for (size_t i = 0; i < m; i++) out[start + i] = leaves[sym[i]];
+                  });
+    return out;
+}
+
+std::string decode_matrix_le(const uint8_t* data, size_t size, int bytes) {
+    std::string out;
+    decode_matrix(data, size, nullptr, [&](uint64_t n) { out.resize(n * bytes); },
+                  [&](uint64_t start, const uint32_t* sym, size_t m, const std::vector<uint64_t>& leaves) {
+                      put_le(leaves, sym, m, bytes, &out[start * bytes]);
+                  });
     return out;
 }
 
