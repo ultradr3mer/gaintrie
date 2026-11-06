@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.idea/
+cpp/build/
+*.png
+*.clar
+*.cle

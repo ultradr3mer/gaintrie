@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaintrie"
+version = "0.1.0"
+description = "Lossless compression of model weights with an entropy-gain bit trie and a Huffman stream"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.14"
+dependencies = [
+    "numpy",
+    "clarautils @ git+https://github.com/ultradr3mer/BitFlagArray",
+]
+
+[project.optional-dependencies]
+plots = ["matplotlib"]
+
+[tool.setuptools]
+packages = ["gaintrie"]
